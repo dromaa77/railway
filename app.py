@@ -12,58 +12,69 @@ import urllib.request      # <--- ADDED
 from urllib.parse import unquote
 from datetime import timedelta
 
-# --- AUTO-INSTALL STATIC FFMPEG (With SVT-AV1 Support) ---
+# --- AUTO-INSTALL STATIC FFMPEG (BtbN Build with SVT-AV1 Support) ---
 def install_static_ffmpeg():
     # Define local bin path
     bin_path = os.path.join(os.getcwd(), "bin")
     ffmpeg_exe = os.path.join(bin_path, "ffmpeg")
     
-    # Check if already installed and working
+    # Check if already installed
     if os.path.exists(ffmpeg_exe):
+        # Optional: Run version check to ensure it's the right one, or just trust existence
         print(f"✅ FFmpeg found at: {ffmpeg_exe}")
-        # Add to PATH immediately
         os.environ["PATH"] = bin_path + os.pathsep + os.environ["PATH"]
         return
 
-    print("⚡ FFmpeg not found or missing SVT-AV1. Downloading static build...")
+    print("⚡ FFmpeg not found. Downloading BtbN static build (Includes SVT-AV1)...")
     os.makedirs(bin_path, exist_ok=True)
     
-    # URL for a static build that INCLUDES libsvtav1 (John Van Sickle or similar)
-    # Using a reliable static build source for Linux amd64
-    url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+    # --- CHANGED: USE BTBN BUILDS (GitHub) ---
+    # These builds definitely include --enable-libsvtav1
+    url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
     tar_path = os.path.join(bin_path, "ffmpeg.tar.xz")
 
     try:
         # 1. Download
-        print("   Downloading (approx 40MB)...")
-        urllib.request.urlretrieve(url, tar_path)
+        print("   Downloading from GitHub (BtbN)...")
+        # Use a user-agent to prevent GitHub 403 errors
+        req = urllib.request.Request(
+            url, 
+            data=None, 
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
+        )
+        with urllib.request.urlopen(req) as response, open(tar_path, 'wb') as out_file:
+            shutil.copyfileobj(response, out_file)
         
         # 2. Extract
         print("   Extracting...")
         with tarfile.open(tar_path, "r:xz") as tar:
-            # Find the ffmpeg binary inside the folder structure
             for member in tar.getmembers():
-                if member.name.endswith("ffmpeg"):
-                    member.name = "ffmpeg" # Rename to just ffmpeg (remove folder prefix)
+                # BtbN structure usually puts binary in "bin/ffmpeg"
+                if member.name.endswith("/ffmpeg") or member.name == "ffmpeg":
+                    member.name = "ffmpeg"  # Flatten structure
                     tar.extract(member, path=bin_path)
-                elif member.name.endswith("ffprobe"):
-                    member.name = "ffprobe"
+                    print("   - Extracted ffmpeg")
+                elif member.name.endswith("/ffprobe") or member.name == "ffprobe":
+                    member.name = "ffprobe" # Flatten structure
                     tar.extract(member, path=bin_path)
+                    print("   - Extracted ffprobe")
 
         # 3. Cleanup and Permissions
-        os.remove(tar_path)
+        if os.path.exists(tar_path):
+            os.remove(tar_path)
+        
         os.chmod(ffmpeg_exe, 0o755)
-        os.chmod(os.path.join(bin_path, "ffprobe"), 0o755)
+        ffprobe_exe = os.path.join(bin_path, "ffprobe")
+        if os.path.exists(ffprobe_exe):
+            os.chmod(ffprobe_exe, 0o755)
 
-        # 4. Add to PATH for this session
+        # 4. Add to PATH
         os.environ["PATH"] = bin_path + os.pathsep + os.environ["PATH"]
-        print("✅ Static FFmpeg installed successfully with SVT-AV1 support.")
+        print("✅ BtbN Static FFmpeg installed successfully.")
 
     except Exception as e:
         print(f"❌ Error installing static FFmpeg: {e}")
-
-# Run the installation check immediately
-install_static_ffmpeg()
+        # IMPORTANT: If BtbN fails (GitHub limits), print error but don't crash app
 
 # --- ADD DENO TO PATH ---
 # Deno installs to ~/.deno/bin by default. 
