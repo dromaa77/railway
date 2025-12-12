@@ -1205,7 +1205,7 @@ TEMPLATE = """
 
             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                 <a href="https://www.google.com" target="_blank" rel="noopener noreferrer"><button>🔍 Google</button></a>
-                <a href="https://mail.google.com" target="_blank" rel="noopener noreferrer"><button>📧 Gmail</button></a>
+                <a href="https://idx.google.com" target="_blank" rel="noopener noreferrer"><button>📧 IDX</button></a>
                 <a href="https://diploi.com" target="_blank" rel="noopener noreferrer"><button>📱 Diploi</button></a>
                 <a href="https://replit.com" target="_blank" rel="noopener noreferrer"><button>🖥️ Server</button></a>
                 <a href="https://u.pcloud.link/publink/show?code=kZMQ3n5ZSnXgcgvdcOufntHqQNgVVyxCSPVX" target="_blank" rel="noopener noreferrer"><button>☁️ pCloud</button></a>
@@ -1213,7 +1213,7 @@ TEMPLATE = """
                 <a href="https://www.1337x.to/" target="_blank" rel="noopener noreferrer"><button>🧲 Torrent</button></a>
                 <a href="http://were-ref.gl.at.ply.gg:36828/" target="_blank" rel="noopener noreferrer"><button>🌐 Toro</button></a>
                 <a href="https://studio.bilibili.tv/" target="_blank" rel="noopener noreferrer"><button>📺 Bilibili</button></a>
-                <a href="http://as-strap.gl.at.ply.gg:36363/" target="_blank" rel="noopener noreferrer"><button>🎬 AS-ST</button></a>
+                <a href="https://my-dev--flsk-prjct-db29.diploi.me/files/" target="_blank" rel="noopener noreferrer"><button>🎬 Flask</button></a>
                 <a href="https://ext.to/" target="_blank" rel="noopener noreferrer"><button>🔗 EXT</button></a>
                 <a href="https://pixeldrain.com/user/filemanager#files" target="_blank" rel="noopener noreferrer"><button>💾 Pixeldrain</button></a>
                 <a href="https://up4stream.com/users/ogaoga" target="_blank" rel="noopener noreferrer"><button>🎬 4stream</button></a>
