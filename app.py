@@ -7,8 +7,63 @@ import threading
 import queue
 import shutil
 import sys
+import tarfile             # <--- ADDED
+import urllib.request      # <--- ADDED
 from urllib.parse import unquote
 from datetime import timedelta
+
+# --- AUTO-INSTALL STATIC FFMPEG (With SVT-AV1 Support) ---
+def install_static_ffmpeg():
+    # Define local bin path
+    bin_path = os.path.join(os.getcwd(), "bin")
+    ffmpeg_exe = os.path.join(bin_path, "ffmpeg")
+    
+    # Check if already installed and working
+    if os.path.exists(ffmpeg_exe):
+        print(f"✅ FFmpeg found at: {ffmpeg_exe}")
+        # Add to PATH immediately
+        os.environ["PATH"] = bin_path + os.pathsep + os.environ["PATH"]
+        return
+
+    print("⚡ FFmpeg not found or missing SVT-AV1. Downloading static build...")
+    os.makedirs(bin_path, exist_ok=True)
+    
+    # URL for a static build that INCLUDES libsvtav1 (John Van Sickle or similar)
+    # Using a reliable static build source for Linux amd64
+    url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+    tar_path = os.path.join(bin_path, "ffmpeg.tar.xz")
+
+    try:
+        # 1. Download
+        print("   Downloading (approx 40MB)...")
+        urllib.request.urlretrieve(url, tar_path)
+        
+        # 2. Extract
+        print("   Extracting...")
+        with tarfile.open(tar_path, "r:xz") as tar:
+            # Find the ffmpeg binary inside the folder structure
+            for member in tar.getmembers():
+                if member.name.endswith("ffmpeg"):
+                    member.name = "ffmpeg" # Rename to just ffmpeg (remove folder prefix)
+                    tar.extract(member, path=bin_path)
+                elif member.name.endswith("ffprobe"):
+                    member.name = "ffprobe"
+                    tar.extract(member, path=bin_path)
+
+        # 3. Cleanup and Permissions
+        os.remove(tar_path)
+        os.chmod(ffmpeg_exe, 0o755)
+        os.chmod(os.path.join(bin_path, "ffprobe"), 0o755)
+
+        # 4. Add to PATH for this session
+        os.environ["PATH"] = bin_path + os.pathsep + os.environ["PATH"]
+        print("✅ Static FFmpeg installed successfully with SVT-AV1 support.")
+
+    except Exception as e:
+        print(f"❌ Error installing static FFmpeg: {e}")
+
+# Run the installation check immediately
+install_static_ffmpeg()
 
 # --- ADD DENO TO PATH ---
 # Deno installs to ~/.deno/bin by default. 
