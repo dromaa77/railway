@@ -7,184 +7,142 @@ import threading
 import queue
 import shutil
 import sys
-import tarfile             # <--- ADDED
-import urllib.request      # <--- ADDED
+import tarfile
+import urllib.request
 from urllib.parse import unquote
 from datetime import timedelta
 
 # --- AUTO-INSTALL STATIC FFMPEG (BtbN Build with SVT-AV1 Support) ---
 def install_static_ffmpeg():
-    # Define local bin path
+    # Define local bin path (e.g., /app/bin)
     bin_path = os.path.join(os.getcwd(), "bin")
     ffmpeg_exe = os.path.join(bin_path, "ffmpeg")
+    ffprobe_exe = os.path.join(bin_path, "ffprobe")
     
-    # Check if already installed
-    if os.path.exists(ffmpeg_exe):
-        # Optional: Run version check to ensure it's the right one, or just trust existence
+    # 1. Check if already installed and executable
+    if os.path.exists(ffmpeg_exe) and os.access(ffmpeg_exe, os.X_OK):
         print(f"✅ FFmpeg found at: {ffmpeg_exe}")
+        # Add to PATH immediately so subprocess finds it
         os.environ["PATH"] = bin_path + os.pathsep + os.environ["PATH"]
         return
 
     print("⚡ FFmpeg not found. Downloading BtbN static build (Includes SVT-AV1)...")
     os.makedirs(bin_path, exist_ok=True)
     
-    # --- CHANGED: USE BTBN BUILDS (GitHub) ---
-    # These builds definitely include --enable-libsvtav1
+    # URL for BtbN "Master" build (Linux x64 GPL)
     url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
     tar_path = os.path.join(bin_path, "ffmpeg.tar.xz")
 
     try:
-        # 1. Download
+        # 2. Download
         print("   Downloading from GitHub (BtbN)...")
-        # Use a user-agent to prevent GitHub 403 errors
-        req = urllib.request.Request(
-            url, 
-            data=None, 
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
-        )
+        # User-agent header to avoid GitHub blocking scripts
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        req = urllib.request.Request(url, headers=headers)
+        
         with urllib.request.urlopen(req) as response, open(tar_path, 'wb') as out_file:
             shutil.copyfileobj(response, out_file)
         
-        # 2. Extract
-        print("   Extracting...")
+        # 3. Extract and Flatten (Remove directory structure)
+        print("   Extracting and flattening...")
         with tarfile.open(tar_path, "r:xz") as tar:
             for member in tar.getmembers():
-                # BtbN structure usually puts binary in "bin/ffmpeg"
-                if member.name.endswith("/ffmpeg") or member.name == "ffmpeg":
-                    member.name = "ffmpeg"  # Flatten structure
-                    tar.extract(member, path=bin_path)
-                    print("   - Extracted ffmpeg")
-                elif member.name.endswith("/ffprobe") or member.name == "ffprobe":
-                    member.name = "ffprobe" # Flatten structure
-                    tar.extract(member, path=bin_path)
-                    print("   - Extracted ffprobe")
+                # We only care about the binaries, we don't want the full folder path
+                if member.name.endswith("/bin/ffmpeg") or member.name == "ffmpeg":
+                    source = tar.extractfile(member)
+                    if source:
+                        with open(ffmpeg_exe, "wb") as target:
+                            shutil.copyfileobj(source, target)
+                        print("   - Extracted ffmpeg")
+                        
+                elif member.name.endswith("/bin/ffprobe") or member.name == "ffprobe":
+                    source = tar.extractfile(member)
+                    if source:
+                        with open(ffprobe_exe, "wb") as target:
+                            shutil.copyfileobj(source, target)
+                        print("   - Extracted ffprobe")
 
-        # 3. Cleanup and Permissions
+        # 4. Cleanup and Permissions
         if os.path.exists(tar_path):
             os.remove(tar_path)
         
-        os.chmod(ffmpeg_exe, 0o755)
-        ffprobe_exe = os.path.join(bin_path, "ffprobe")
+        # Make executable
+        if os.path.exists(ffmpeg_exe):
+            os.chmod(ffmpeg_exe, 0o755)
         if os.path.exists(ffprobe_exe):
             os.chmod(ffprobe_exe, 0o755)
 
-        # 4. Add to PATH
+        # 5. Add to PATH for this session
         os.environ["PATH"] = bin_path + os.pathsep + os.environ["PATH"]
-        print("✅ BtbN Static FFmpeg installed successfully.")
+        print(f"✅ BtbN Static FFmpeg installed to {bin_path}")
 
     except Exception as e:
         print(f"❌ Error installing static FFmpeg: {e}")
-        # IMPORTANT: If BtbN fails (GitHub limits), print error but don't crash app
+
+# Run the installation check immediately on script start
+install_static_ffmpeg()
 
 # --- ADD DENO TO PATH ---
-# Deno installs to ~/.deno/bin by default. 
-# We need to make sure Python and yt-dlp can see it.
 deno_bin = os.path.expanduser("~/.deno/bin")
 if os.path.exists(deno_bin) and deno_bin not in os.environ["PATH"]:
     print(f"Adding Deno to PATH: {deno_bin}")
     os.environ["PATH"] += os.pathsep + deno_bin
 
-    
 # --- YTDLP PATH CONFIGURATION ---
 def find_ytdlp():
-    # 1. Try to find 'yt-dlp' in the system PATH
     path = shutil.which("yt-dlp")
-    if path:
-        return path
-    
-    # 2. Look in the same directory as the python executable (e.g., .venv/bin/)
+    if path: return path
     python_dir = os.path.dirname(sys.executable)
     possible_path = os.path.join(python_dir, "yt-dlp")
-    if os.path.exists(possible_path):
-        return possible_path
-
-    # 3. Last resort: default to "yt-dlp" command string
+    if os.path.exists(possible_path): return possible_path
     return "yt-dlp"
 
 YTDLP_PATH = find_ytdlp()
 print(f"Using yt-dlp at: {YTDLP_PATH}")
 
-# Get ffmpeg and ffprobe paths - priority: env variables > app bin > system PATH > common paths
-# App-specific and common system paths for ffmpeg (Linux)
+# Update COMMON_PATHS to include our new bin folder specifically
 COMMON_PATHS = [
-    "/app/flask/bin", "/app/bin", "/usr/bin", "/usr/local/bin", "/opt/bin"
+    os.path.join(os.getcwd(), "bin"),  # Priority 1: The one we just downloaded
+    "/app/flask/bin", "/app/bin", "/usr/bin", "/usr/local/bin"
 ]
 
-
 def find_command(cmd_name):
-    """Find command in env var, system PATH, or common paths"""
-    # Check environment variable first
-    env_path = os.environ.get(f"{cmd_name.upper()}_PATH", "").strip()
-    if env_path and os.path.exists(env_path):
-        return env_path
-
-    # Check system PATH using shutil.which
+    # Check current env PATH first (which we just updated)
     found = shutil.which(cmd_name)
-    if found:
-        return found
+    if found: return found
 
-    # Check common system paths (useful for isolated Python environments)
     for base_path in COMMON_PATHS:
         full_path = os.path.join(base_path, cmd_name)
         if os.path.exists(full_path) and os.access(full_path, os.X_OK):
             return full_path
-
-    # Try subprocess to find it via shell which
-    try:
-        result = subprocess.run(["sh", "-c", f"which {cmd_name}"],
-                                capture_output=True,
-                                text=True,
-                                timeout=2)
-        if result.returncode == 0:
-            path = result.stdout.strip()
-            if path and os.path.exists(path):
-                return path
-    except:
-        pass
-
-    # Fallback to just the command name (will fail at runtime with useful error)
     return cmd_name
-
 
 FFMPEG_PATH = find_command("ffmpeg")
 FFPROBE_PATH = find_command("ffprobe")
 
-
-# Check if paths exist and are executable
 def check_ffmpeg_available():
     try:
-        # Try to run ffmpeg
-        result = subprocess.run([FFMPEG_PATH, "-version"],
-                                capture_output=True,
-                                timeout=5,
-                                text=True)
+        result = subprocess.run([FFMPEG_PATH, "-version"], capture_output=True, timeout=5, text=True)
         if result.returncode == 0:
             return True, "OK"
         return False, f"Exit code {result.returncode}"
-    except subprocess.TimeoutExpired:
-        return False, "Timeout"
-    except FileNotFoundError:
-        return False, "Command not found in PATH"
     except Exception as e:
         return False, str(e)[:100]
 
-
-# Replit environment - dependencies installed via packager_tool
 ffmpeg_available, ffmpeg_error = check_ffmpeg_available()
 ffmpeg_status = "✅ Available" if ffmpeg_available else "❌ NOT FOUND"
 print(f"FFmpeg: {ffmpeg_status}")
 print(f"  FFMPEG_PATH: {FFMPEG_PATH}")
 if not ffmpeg_available:
     print(f"    - error: {ffmpeg_error}")
-print("✅ Python packages: flask, yt-dlp, requests (pre-installed)")
 
 from flask import Flask, render_template_string, request, send_from_directory, flash, url_for, Response, redirect, session, jsonify
 from werkzeug.utils import secure_filename
 import requests
 import yt_dlp
 
-# create app first
 app = Flask(__name__)
+# ... (Rest of your code continues from here)
 app.secret_key = os.environ.get("SESSION_SECRET",
                                 "replit-video-downloader-secret-key")
 
