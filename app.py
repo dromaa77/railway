@@ -2760,6 +2760,8 @@ def encode_file(input_path,
                 upload_pixeldrain=False,
                 upload_4stream=False):
     global current_process
+    
+    # 1. SCALE HANDLING
     if scale:
         scale_map = {
             "1920:-2": "1080p",
@@ -2771,75 +2773,93 @@ def encode_file(input_path,
         if res_tag:
             base, ext = os.path.splitext(output_filename)
             output_filename = f"{base}_{res_tag}{ext}"
+    
     safe_output = get_safe_filename(output_filename)
     output_path = os.path.join(DOWNLOAD_FOLDER, safe_output)
     output_path = get_unique_filepath(output_path)
     safe_output = os.path.basename(output_path)
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
     try:
         while not q.empty():
             q.get()
         q.put({"stage": "Initializing encoding...", "percent": 0})
+        
         if not is_media_file(input_path):
             q.put({"error": "File type cannot be encoded."})
             return
+            
         duration = get_media_duration(input_path)
+        
         if codec == "none":
             shutil.copy2(input_path, output_path)
             q.put({"stage": "✅ Copied!", "percent": 100})
         else:
             stage_msg = f"Encoding to {codec.upper()}..."
             q.put({"stage": stage_msg, "percent": 0})
-            ffmpeg_cmd = [FFMPEG_PATH, "-y", "-i", input_path]
+            
+            # --- RAILWAY OPTIMIZATION: Limit Global Threads ---
+            # Railway standard containers crash if you spawn too many threads
+            ffmpeg_cmd = [FFMPEG_PATH, "-y", "-threads", "2", "-i", input_path]
+            
             vf_params = []
             if scale: vf_params.append(f"scale={scale}")
+            
             base_codec = codec.replace('_copy_audio', '')
             video_codec = "libx265" if base_codec == "h265" else "libsvtav1" if base_codec == "av1" else None
+            
             if codec == "copy_video":
                 ffmpeg_cmd.extend(["-c:v", "copy"])
             else:
+                # Video Options
+                video_opts = ["-c:v", video_codec, "-preset", preset]
+                
+                # --- RAILWAY OPTIMIZATION: Specific Codec Throttling ---
+                if base_codec == "h265":
+                    # pool=2 limits internal parallel processing
+                    # frame-threads=2 limits decoding threads
+                    video_opts.extend(["-x265-params", "pool=2:frame-threads=2:log-level=warning"])
+                
                 if pass_mode == "2-pass":
-                    bitrate_val = int(
-                        bitrate) if bitrate and bitrate.strip() else 0
+                    bitrate_val = int(bitrate) if bitrate and bitrate.strip() else 0
                     if bitrate_val < 100:
                         q.put({"error": "Bitrate required for 2-pass."})
                         return
-                    video_opts = [
-                        "-c:v", video_codec, "-preset", preset, "-b:v",
-                        f"{bitrate_val}k"
-                    ]
-                    pass1_cmd = ffmpeg_cmd + video_opts + [
-                        "-pass", "1", "-an", "-f", "null", "-"
-                    ]
-                    subprocess.run(pass1_cmd,
-                                   check=True,
-                                   stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL)
+                    video_opts.extend(["-b:v", f"{bitrate_val}k"])
+                    
+                    # Pass 1
+                    pass1_cmd = ffmpeg_cmd + video_opts + ["-pass", "1", "-an", "-f", "null", "-"]
+                    subprocess.run(pass1_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    
+                    # Pass 2 Setup
                     ffmpeg_cmd.extend(video_opts + ["-pass", "2"])
                 else:
-                    crf_val = int(crf) if crf else (
-                        28 if base_codec == 'h265' else 24)
-                    ffmpeg_cmd.extend([
-                        "-c:v", video_codec, "-preset", preset, "-crf",
-                        str(crf_val)
-                    ])
+                    crf_val = int(crf) if crf else (28 if base_codec == 'h265' else 24)
+                    ffmpeg_cmd.extend(video_opts + ["-crf", str(crf_val)])
+                
                 if fps: ffmpeg_cmd.extend(["-r", fps])
+
+            # Audio Options
             if codec.endswith('_copy_audio'):
                 ffmpeg_cmd.extend(["-c:a", "copy"])
             else:
                 audio_bitrate_val = int(audio_bitrate) if audio_bitrate else 96
-                audio_channels = 2 if force_stereo else get_audio_channels(
-                    input_path)
+                audio_channels = 2 if force_stereo else get_audio_channels(input_path)
                 ffmpeg_cmd.extend([
-                    "-ac",
-                    str(audio_channels), "-c:a", "libopus", "-b:a",
-                    f"{audio_bitrate_val}k"
+                    "-ac", str(audio_channels), 
+                    "-c:a", "libopus", 
+                    "-b:a", f"{audio_bitrate_val}k"
                 ])
+
+            # AV1 Specific Options (With Resource Limits)
             if base_codec == 'av1' and codec != 'copy_video':
                 svt_params = [
                     f"aq-mode={aq_mode}",
-                    f"variance-boost-strength={variance_boost}"
+                    f"variance-boost-strength={variance_boost}",
+                    # Force internal threads low to prevent OOM
+                    "lp=2" 
                 ]
+                
                 if tiles and 'x' in tiles:
                     try:
                         rows_str, cols_str = tiles.split('x')
@@ -2851,56 +2871,64 @@ def encode_file(input_path,
                             f"tile-columns={tile_columns}"
                         ])
                     except ValueError:
-                        q.put({
-                            "log":
-                            f"Warning: Could not parse tiles '{tiles}'. Ignoring."
-                        })
+                        pass
                 ffmpeg_cmd.extend(["-svtav1-params", ":".join(svt_params)])
+
             if enable_vmaf: vf_params.append("libvmaf")
             if vf_params: ffmpeg_cmd.extend(["-vf", ",".join(vf_params)])
+            
             ffmpeg_cmd.append(output_path)
-            current_process = subprocess.Popen(ffmpeg_cmd,
-                                               stdout=subprocess.PIPE,
-                                               stderr=subprocess.STDOUT,
-                                               universal_newlines=True,
-                                               encoding='utf-8',
-                                               errors='ignore')
+            
+            # --- EXECUTE ENCODING ---
+            current_process = subprocess.Popen(
+                ffmpeg_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                encoding='utf-8',
+                errors='replace' # Replaced 'ignore' to debug funny characters if any
+            )
+            
             if current_process.stdout is None:
                 raise Exception("Process stdout is None")
+                
             for line in iter(current_process.stdout.readline, ''):
                 q.put({"log": line.strip()})
+                
+                # Check for OOM signals in log if visible, though mostly invisible
                 if duration > 0:
-                    match = re.search(r'time=(\d{2}):(\d{2}):(\d{2})\.(\d{2})',
-                                      line)
+                    match = re.search(r'time=(\d{2}):(\d{2}):(\d{2})\.(\d{2})', line)
                     if match:
                         h, m, s, ms = map(int, match.groups())
-                        percent = min(
-                            100,
-                            ((h * 3600 + m * 60 + s + ms / 100) / duration) *
-                            100)
+                        current_sec = h * 3600 + m * 60 + s + ms / 100
+                        percent = min(100, (current_sec / duration) * 100)
                         q.put({"stage": stage_msg, "percent": percent})
-                    if enable_vmaf:
-                        vmaf_match = re.search(r'VMAF score: (\d+\.\d+)', line)
-                        if vmaf_match:
-                            q.put(
-                                {"log": f"VMAF Score: {vmaf_match.group(1)}"})
+                        
             current_process.wait()
+            
+            # Check strictly for crash codes (Unix signals)
             if current_process.returncode != 0:
-                q.put({"error": "Encoding process terminated."})
+                err_msg = f"Encoding failed (Code {current_process.returncode})"
+                if current_process.returncode == -9:
+                    err_msg += " - Process KILLED (likely Out of Memory on Railway)"
+                q.put({"error": err_msg})
                 current_process = None
                 return
+                
             current_process = None
             q.put({
                 "stage": "✅ Done!",
                 "percent": 100,
                 "log": f"{codec.upper()} encoding complete."
             })
+
         if upload_pixeldrain:
             upload_to_pixeldrain(output_path, os.path.basename(safe_output), q)
         elif upload_4stream:
             upload_to_4stream(output_path, os.path.basename(safe_output), q)
+            
     except Exception as e:
-        q.put({"error": str(e)})
+        q.put({"error": f"Exception: {str(e)}"})
     finally:
         current_process = None
         if not (upload_pixeldrain or upload_4stream):
